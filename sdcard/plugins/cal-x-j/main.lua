@@ -501,12 +501,30 @@ local function mvGrid()
     end
     local prevDim = daysInMonth(prevYear, prevMonth)
 
+    -- True if viewing a month entirely in the past
+    local isViewPast = (yYear < curYear) or (yYear == curYear and yMonth < curMonth)
+
+    -- True if a given date is in the past (before today)
+    local function isDatePast(y, m, d)
+        if y < curYear then return true end
+        if y == curYear and m < curMonth then return true end
+        if y == curYear and m == curMonth and d < curDay then return true end
+        return false
+    end
+
     local function drawAdjacentDate(cx, cy, y, m, d, isWeekend, isSunday)
+        -- Per-cell background for past adjacent dates when NOT already covered by isViewPast fill
+        if isViewPast or isDatePast(y, m, d) then
+            gui.fillRoundedRect(cx, cy, MV_CELL_W, rowH, 0, COLOR_WHITE)
+            gui.fillRoundedRect(cx, cy, MV_CELL_W, rowH, 0, COLOR_LIGHT_GRAY)
+        end
         local label = string.format("%d/%d", m, d)
         local tw = gui.getTextWidth(FONTS.small, label)
         local nx = cx + math.floor((MV_CELL_W - tw) / 2)
         local ny = cy + math.floor((rowH - 12) / 2)
         local isHoliday = holidays and holidays[hkey(y, m, d)]
+        local isPastAdj = isDatePast(y, m, d)
+        -- Past bg: weekday black, holiday/weekend dark gray; future: same convention
         local color = (isHoliday or isWeekend) and COLOR_DARK_GRAY or true
         gui.drawText(FONTS.small, nx, ny, label, color, STYLE_REGULAR)
         if isSunday then
@@ -555,15 +573,6 @@ local function mvGrid()
         drawAdjacentDate(cx, cy, nextYear, nextMonth, day, col == satC or col == sunC, col == sunC)
     end
 
-    -- Light grid lines
-    for r = 0, weeks do
-        gui.drawLine(0, MV_GRID_Y + r * rowH, 480, MV_GRID_Y + r * rowH, 1, COLOR_LIGHT_GRAY)
-    end
-    for c = 1, 6 do
-        gui.drawLine(MV_CELL_X + c * MV_CELL_W, MV_GRID_Y,
-                     MV_CELL_X + c * MV_CELL_W, MV_GRID_Y + weeks * rowH, 1, COLOR_LIGHT_GRAY)
-    end
-
     for d = 1, dim do
         local idx = sc + d - 1
         local row = math.floor(idx / 7)
@@ -574,9 +583,17 @@ local function mvGrid()
         local key      = hkey(yYear, yMonth, d)
         local hname    = holidays and holidays[key]
         local isToday  = (yYear == curYear and yMonth == curMonth and d == curDay)
+        local isPastDay = not isViewPast and isDatePast(yYear, yMonth, d)
         local isSat    = (col == satC)
         local isSun    = (col == sunC)
         local isHoliday = hname ~= nil
+        local isCellPast = isViewPast or isPastDay  -- on a light gray background
+
+        -- Per-cell background for past days (current month: only past days; past month: all cells)
+        if isCellPast then
+            gui.fillRoundedRect(cx, cy, MV_CELL_W, rowH, 0, COLOR_WHITE)
+            gui.fillRoundedRect(cx, cy, MV_CELL_W, rowH, 0, COLOR_LIGHT_GRAY)
+        end
 
         local numStr = tostring(d)
         local nw     = gui.getTextWidth(FONTS.ui12, numStr)
@@ -585,32 +602,36 @@ local function mvGrid()
             local weekNo = weekNumber(yYear, yMonth, d)
             local weekLabel = string.format(STR.WEEK_NUMBER_FORMAT, weekNo)
             local ww = gui.getTextWidth(FONTS.small, weekLabel)
-            gui.drawText(FONTS.small, cx + MV_CELL_W - ww - 3, cy + 2, weekLabel, COLOR_DARK_GRAY, STYLE_REGULAR)
+            gui.drawText(FONTS.small, cx + MV_CELL_W - ww - 3, cy + 2, weekLabel, true, STYLE_REGULAR)
         end
 
         -- Vertically center; shift up a bit if holiday name follows
         local ny = cy + math.floor(rowH / 2) - (isHoliday and 14 or 8)
         local nx = cx + math.floor((MV_CELL_W - nw) / 2)
 
+        -- Color logic:
+        -- Past cell: weekday black, holiday/weekend dark gray (lighter)
+        -- Future cell: weekday black, holiday/weekend dark gray
         local color
-        if isHoliday or isSat or isSun then
+        local numStyle
+        if isToday then
             color = COLOR_DARK_GRAY
+            numStyle = STYLE_REGULAR
+        elseif isCellPast then
+            color = (isHoliday or isSat or isSun) and COLOR_DARK_GRAY or true
+            numStyle = STYLE_REGULAR
         else
-            color = true
+            color = (isHoliday or isSat or isSun) and COLOR_DARK_GRAY or true
+            numStyle = STYLE_REGULAR
         end
 
         if isToday then
-            -- Always draw today with high contrast and border ring.
-            color = true
             gui.drawRoundedRect(cx + 2, cy + 2, MV_CELL_W - 4, rowH - 4, 3, 2, false)
             gui.drawRoundedRect(cx + 3, cy + 3, MV_CELL_W - 6, rowH - 6, 3, 2, false)
-            gui.drawText(FONTS.ui12, nx, ny, numStr, color, STYLE_BOLD)
-        else
-            gui.drawText(FONTS.ui12, nx, ny, numStr, color, STYLE_REGULAR)
         end
+        gui.drawText(FONTS.ui12, nx, ny, numStr, color, numStyle)
 
         if isHoliday then
-            -- 祝日マークを追加して確実に認識できるようにする
             gui.drawText(FONTS.jp_small, cx + 2, cy + 4, STR.HOLIDAY_MARK, COLOR_DARK_GRAY, STYLE_BOLD)
             local s  = hname
             if isConsecutiveHoliday(yYear, yMonth, d) then
@@ -624,13 +645,22 @@ local function mvGrid()
             end
         end
     end
+
+    -- Light grid lines (drawn after fills so they appear on top)
+    for r = 0, weeks do
+        gui.drawLine(0, MV_GRID_Y + r * rowH, 480, MV_GRID_Y + r * rowH, 1, COLOR_LIGHT_GRAY)
+    end
+    for c = 1, 6 do
+        gui.drawLine(MV_CELL_X + c * MV_CELL_W, MV_GRID_Y,
+                     MV_CELL_X + c * MV_CELL_W, MV_GRID_Y + weeks * rowH, 1, COLOR_LIGHT_GRAY)
+    end
 end
 
 local function drawMonthView()
     gui.clear()
     mvHeader()
-    mvDOW()
     mvGrid()
+    mvDOW()  -- drawn after grid fills so text is never covered
     if showHints then
         gui.drawButtonHints(BUTTON.exit, BUTTON.yearView, BUTTON.left, BUTTON.right)
     else
@@ -640,45 +670,58 @@ end
 
 -- ── Year view drawing ──────────────────────────────
 local function drawMini(mx, my, mw, mh, year, month, holidayCount)
-    local isNow = (year == curYear and month == curMonth)
-    local isSel = (month == selMonth)
+    local isNow  = (year == curYear and month == curMonth)
+    local isSel  = (month == selMonth)
+    local isPast = (year < curYear) or (year == curYear and month < curMonth)
+
+    -- Background: fill light gray for past months
+    -- Note: gui.fillRect only supports black/white (bool); use fillRoundedRect with radius=0
+    -- to get actual gray via fillRectDither on the device.
+    if isPast then
+        gui.fillRoundedRect(mx, my, mw, mh, 0, COLOR_LIGHT_GRAY)
+    end
 
     -- Border: extra bold if selected, light gray otherwise
     if isSel then
-        gui.drawRect(mx,     my,     mw,     mh,     true)
-        gui.drawRect(mx + 1, my + 1, mw - 2, mh - 2, true)
-        gui.drawRect(mx + 2, my + 2, mw - 4, mh - 4, true)
+        local borderColor = true
+        gui.drawRect(mx,     my,     mw,     mh,     borderColor)
+        gui.drawRect(mx + 1, my + 1, mw - 2, mh - 2, borderColor)
+        gui.drawRect(mx + 2, my + 2, mw - 4, mh - 4, borderColor)
     else
-        gui.drawRect(mx, my, mw, mh, COLOR_LIGHT_GRAY)
+        local borderColor = isPast and COLOR_DARK_GRAY or COLOR_LIGHT_GRAY
+        gui.drawRect(mx, my, mw, mh, borderColor)
     end
 
-    -- Month label
+    -- Month label: always true (black) for visibility
+    local labelColor = true
     local label = string.format(STR.MONTH_LABEL_FORMAT, month)
     local lw    = gui.getTextWidth(FONTS.ui12, label)
     local ls    = isNow and STYLE_BOLD or STYLE_REGULAR
-    gui.drawText(FONTS.ui12, mx + math.floor((mw - lw) / 2) - 1, my - 5, label, true, ls)
+    gui.drawText(FONTS.ui12, mx + math.floor((mw - lw) / 2) - 1, my - 5, label, labelColor, ls)
 
     -- Quarter label in year view (fiscal style: Apr-Jun=q1, Jul-Sep=q2, Oct-Dec=q3, Jan-Mar=q4)
     if showQuarter then
         local quarter = math.floor(((month + 8) % 12) / 3) + 1
-        local qlabel = string.format("%s%d", YEAR_VIEW_CONFIG.quarterPrefix, quarter)
+        local qlabel  = string.format("%s%d", YEAR_VIEW_CONFIG.quarterPrefix, quarter)
+        local qColor  = isPast and COLOR_DARK_GRAY or YEAR_VIEW_CONFIG.quarterColor
         gui.drawText(YEAR_VIEW_CONFIG.quarterFont,
                      mx + YEAR_VIEW_CONFIG.quarterOffsetX,
                      my + YEAR_VIEW_CONFIG.quarterOffsetY,
                      qlabel,
-                     YEAR_VIEW_CONFIG.quarterColor,
+                     qColor,
                      YEAR_VIEW_CONFIG.quarterStyle)
     end
 
     -- Holiday marker in year view
     if showHolidayCount and holidayCount and holidayCount > 0 then
         local marker = string.format("%s%d", YEAR_VIEW_CONFIG.holidayMarkerPrefix, holidayCount)
-        local tw = gui.getTextWidth(YEAR_VIEW_CONFIG.holidayMarkerFont, marker)
+        local tw     = gui.getTextWidth(YEAR_VIEW_CONFIG.holidayMarkerFont, marker)
+        local hColor = isPast and COLOR_DARK_GRAY or YEAR_VIEW_CONFIG.holidayMarkerColor
         gui.drawText(YEAR_VIEW_CONFIG.holidayMarkerFont,
                      mx + mw - tw + YEAR_VIEW_CONFIG.holidayMarkerOffsetX,
                      my + YEAR_VIEW_CONFIG.holidayMarkerOffsetY,
                      marker,
-                     YEAR_VIEW_CONFIG.holidayMarkerColor,
+                     hColor,
                      YEAR_VIEW_CONFIG.holidayMarkerStyle)
     end
 
@@ -687,17 +730,8 @@ local function drawMini(mx, my, mw, mh, year, month, holidayCount)
     local gridY  = my + labelH + dowH
     local gridH  = mh - labelH - dowH - 3
 
-    -- DoW row
     local days, satC, sunC = weekStartConfig()
     local cw   = math.floor(mw / 7)
-
-    for col = 0, 6 do
-        local color = (col == satC or col == sunC) and COLOR_DARK_GRAY or true
-        local s  = days[col + 1]
-        local tw = gui.getTextWidth(FONTS.jp_small, s)
-        gui.drawText(FONTS.jp_small, mx + col * cw + math.floor((cw - tw) / 2),
-                     my + labelH, s, color, STYLE_REGULAR)
-    end
 
     -- Day numbers
     local dim   = daysInMonth(year, month)
@@ -705,6 +739,17 @@ local function drawMini(mx, my, mw, mh, year, month, holidayCount)
     local total = sc + dim
     local weeks = math.floor((total + 6) / 7)
     local rowH  = math.floor(gridH / (weeks > 0 and weeks or 1))
+
+    -- Fill leading blank cells with COLOR_LIGHT_GRAY for current month (all are past days)
+    if isNow then
+        for idx = 0, sc - 1 do
+            local row = math.floor(idx / 7)
+            local col = idx % 7
+            local dx  = mx + col * cw
+            local dy  = gridY + row * rowH
+            gui.fillRoundedRect(dx, dy, cw, rowH, 0, COLOR_LIGHT_GRAY)
+        end
+    end
 
     for d = 1, dim do
         local idx = sc + d - 1
@@ -715,25 +760,41 @@ local function drawMini(mx, my, mw, mh, year, month, holidayCount)
 
         local key     = hkey(year, month, d)
         local hname   = holidays and holidays[key]
-        local isToday = (year == curYear and month == curMonth and d == curDay)
+        local isToday   = (year == curYear and month == curMonth and d == curDay)
+        local isPastDay = (year == curYear and month == curMonth and d < curDay)
 
         local numStr = tostring(d)
         local tw     = gui.getTextWidth(FONTS.small, numStr)
         local nx     = dx + math.floor((cw - tw) / 2)
         local ny     = dy + math.floor((rowH - 12) / 2)
 
+        -- Background for past days in current month
+        if isPastDay then
+            gui.fillRoundedRect(dx, dy, cw, rowH, 0, COLOR_LIGHT_GRAY)
+        end
+
         if isToday then
             local r = math.floor(math.min(cw, rowH) / 2) - 1
             if r < 3 then r = 3 end
             -- Outline circle only, not filled
-            gui.drawCircle(dx + math.floor(cw / 2), dy + math.floor(rowH / 2), r, 2, false)
-            gui.drawText(FONTS.small, nx, ny, numStr, COLOR_DARK_GRAY, STYLE_BOLD)
+            local color = (hname or isSat or isSun) and COLOR_DARK_GRAY or true
+            gui.drawText(FONTS.small, nx, ny, numStr, color, STYLE_REGULAR)
+            -- gui.drawCircle(dx + math.floor(cw / 2), dy + math.floor(rowH / 2), r, 2, false)
         else
             local isSat  = (col == satC)
             local isSun  = (col == sunC)
-            local color  = (hname or isSat or isSun) and COLOR_DARK_GRAY or true
+            local color = (hname or isSat or isSun) and COLOR_DARK_GRAY or true
             gui.drawText(FONTS.small, nx, ny, numStr, color, STYLE_REGULAR)
         end
+    end
+
+    -- DoW row: drawn last so fills don't cover it
+    for col = 0, 6 do
+        local color = (col == satC or col == sunC) and COLOR_DARK_GRAY or true
+        local s  = days[col + 1]
+        local tw = gui.getTextWidth(FONTS.jp_small, s)
+        gui.drawText(FONTS.jp_small, mx + col * cw + math.floor((cw - tw) / 2),
+                     my + labelH, s, color, STYLE_REGULAR)
     end
 end
 
